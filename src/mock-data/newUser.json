@@ -1,0 +1,17 @@
+{
+  "profile": {
+    "userId": "new_user",
+    "name": "Alex Doe",
+    "age": 65,
+    "avatarUrl": "https://i.pravatar.cc/150?u=new_user"
+  },
+  "summary": {
+    "riskLevel": "CALCULATING",
+    "assessmentDate": "2026-02-21T00:00:00.000Z",
+    "isBuildingBaseline": true,
+    "baselineProgress": 5
+  },
+  "trend": [],
+  "domains": {},
+  "alerts": []
+}

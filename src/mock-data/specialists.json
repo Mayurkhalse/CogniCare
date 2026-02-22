@@ -1,0 +1,74 @@
+[
+  {
+    "id": "spec001",
+    "name": "Dr. Evelyn Reed",
+    "clinic": "NeuroHealth Partners",
+    "location": "San Francisco, CA",
+    "rating": 4.9,
+    "phone": "(415) 555-1234",
+    "distance": "5.2 mi"
+  },
+  {
+    "id": "spec002",
+    "name": "Dr. Samuel Chen",
+    "clinic": "Golden Gate Neurology",
+    "location": "San Francisco, CA",
+    "rating": 4.8,
+    "phone": "(415) 555-5678",
+    "distance": "8.1 mi"
+  },
+  {
+    "id": "spec003",
+    "name": "Dr. Isabella Garcia",
+    "clinic": "Bay Area Brain Institute",
+    "location": "Oakland, CA",
+    "rating": 4.9,
+    "phone": "(510) 555-8765",
+    "distance": "12.5 mi"
+  },
+  {
+    "id": "spec004",
+    "name": "Dr. Ben Carter",
+    "clinic": "UCSF Memory and Aging Center",
+    "location": "San Francisco, CA",
+    "rating": 5.0,
+    "phone": "(415) 555-3456",
+    "distance": "6.8 mi"
+  },
+  {
+    "id": "spec005",
+    "name": "Dr. Olivia White",
+    "clinic": "Stanford Neuroscience Health Center",
+    "location": "Palo Alto, CA",
+    "rating": 4.9,
+    "phone": "(650) 555-9999",
+    "distance": "35.2 mi"
+  },
+  {
+    "id": "spec006",
+    "name": "Dr. Marcus Green",
+    "clinic": "East Bay Neurology Associates",
+    "location": "Berkeley, CA",
+    "rating": 4.7,
+    "phone": "(510) 555-1122",
+    "distance": "14.0 mi"
+  },
+  {
+    "id": "spec007",
+    "name": "Dr. Sophia Rodriguez",
+    "clinic": "Peninsula Cognitive Health",
+    "location": "San Mateo, CA",
+    "rating": 4.8,
+    "phone": "(650) 555-4321",
+    "distance": "20.5 mi"
+  },
+  {
+    "id": "spec008",
+    "name": "Dr. Liam O'Connell",
+    "clinic": "Marin Neurology Group",
+    "location": "Sausalito, CA",
+    "rating": 4.6,
+    "phone": "(415) 555-8877",
+    "distance": "15.8 mi"
+  }
+]

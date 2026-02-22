@@ -1,0 +1,31 @@
+{
+  "profile": {
+    "userId": "robert_declining",
+    "name": "Robert Miller",
+    "age": 72,
+    "avatarUrl": "https://i.pravatar.cc/150?u=robert_declining"
+  },
+  "summary": {
+    "currentScore": 62,
+    "baselineAvg": 80,
+    "riskLevel": "HIGH",
+    "riskScore": 78,
+    "assessmentDate": "2026-02-21T00:00:00.000Z"
+  },
+  "trend": [],
+  "domains": {
+    "memory": { "score": 65, "change": -18.2 },
+    "language": { "score": 70, "change": -15.5 },
+    "processingSpeed": { "score": 60, "change": -22.0 }
+  },
+  "alerts": [
+    {
+      "id": "alert001",
+      "type": "CRITICAL",
+      "title": "Significant Cognitive Decline Detected",
+      "finding": "A consistent downward trend has been observed across all cognitive domains over the past 45 days, most notably in Processing Speed. Current scores are significantly below the established baseline.",
+      "recommendation": "It is highly recommended to schedule a consultation with a healthcare professional for a comprehensive evaluation. Early intervention is key.",
+      "date": "2026-02-20T00:00:00.000Z"
+    }
+  ]
+}

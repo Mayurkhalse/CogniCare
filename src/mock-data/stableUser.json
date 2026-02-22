@@ -1,0 +1,22 @@
+{
+  "profile": {
+    "userId": "sarah_stable",
+    "name": "Sarah Connor",
+    "age": 68,
+    "avatarUrl": "https://i.pravatar.cc/150?u=sarah_stable"
+  },
+  "summary": {
+    "currentScore": 82,
+    "baselineAvg": 80,
+    "riskLevel": "LOW",
+    "assessmentDate": "2026-02-21T00:00:00.000Z",
+    "dailyStreak": 24
+  },
+  "trend": [],
+  "domains": {
+    "memory": { "score": 85, "change": 1.2 },
+    "language": { "score": 80, "change": -0.5 },
+    "processingSpeed": { "score": 81, "change": 0.8 }
+  },
+  "alerts": []
+}
