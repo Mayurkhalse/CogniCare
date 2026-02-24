@@ -1,10 +1,11 @@
 // src/pages/user/UserHome.jsx
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/common/Card';
 import { Gamepad2, Brain, BarChart } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { LocationRequestModal } from '../../components/location/LocationRequestModal';
 
 const gameCards = [
     { title: 'Memory Match', description: 'Test your recall with this classic card matching game.', icon: Gamepad2, link: '/play/memory-match', lastPlayed: 'Yesterday' },
@@ -13,9 +14,14 @@ const gameCards = [
 
 const UserHome = () => {
     const { user } = useAuth();
+    const [isModalOpen, setIsModalOpen] = useState(true); // Show modal on component load for demo
 
     return (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+            <LocationRequestModal 
+                isOpen={isModalOpen}
+                onClose={() => setIsModalOpen(false)}
+            />
             <div className="space-y-8">
                 <div>
                     <h1 className="text-3xl font-bold">Welcome back, {user?.name}!</h1>

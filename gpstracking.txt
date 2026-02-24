@@ -1,0 +1,1660 @@
+# CogniCare GPS Tracking Feature - Complete Specification Document
+
+> **Feature: Real-time GPS Location Tracking for At-Risk Users**
+> 
+> This document provides complete implementation details for adding GPS location monitoring to the CogniCare family dashboard when users have elevated cognitive decline risk.
+
+---
+
+## TABLE OF CONTENTS
+
+1. [Feature Overview](#1-feature-overview)
+2. [User Consent & Privacy Flow](#2-user-consent--privacy-flow)
+3. [GPS Tracking Logic](#3-gps-tracking-logic)
+4. [Database Schema Changes](#4-database-schema-changes)
+5. [Backend API Endpoints](#5-backend-api-endpoints)
+6. [Frontend Components](#6-frontend-components)
+7. [Family Dashboard Integration](#7-family-dashboard-integration)
+8. [Activity Monitoring](#8-activity-monitoring)
+9. [Implementation Steps](#9-implementation-steps)
+10. [Testing Checklist](#10-testing-checklist)
+11. [Demo Script](#11-demo-script)
+
+---
+
+## 1. FEATURE OVERVIEW
+
+### 1.1 What This Feature Does
+
+**GPS Location Tracking** allows family caregivers to view the last known location of users who have:
+- Medium or High cognitive decline risk (score ≥ 40), OR
+- Manually enabled location sharing regardless of risk level
+
+**Activity Monitoring** shows family members:
+- When user last opened CogniCare
+- Whether user played games today
+- Alert if no activity for 2+ days
+
+### 1.2 Key Constraints (Web App PWA)
+
+✅ **Can Do:**
+- Capture GPS location when user actively uses CogniCare
+- Show last known location on map
+- On-demand location requests from family
+- Track app engagement (opens, game plays)
+
+❌ **Cannot Do (Web App Limitation):**
+- Continuous background GPS tracking when app is closed
+- Real-time tracking (only captures when app is used)
+- Track user when browser/app is not open
+
+### 1.3 Trigger Conditions
+
+**GPS Tracking Activates When:**
+
+1. **Automatic (Risk-based):**
+   - User's risk score reaches MEDIUM (40-69) or HIGH (70+)
+   - Family member gets notification
+   - Family can request location access from user
+
+2. **Manual (User/Family choice):**
+   - Family can request location access anytime
+   - User can enable location sharing anytime in settings
+   - Independent of risk score
+
+**GPS Tracking Deactivates When:**
+
+- Risk score improves to LOW (<40) **AND** was automatically enabled
+  - Family receives notification: "Risk improved to LOW. GPS tracking has been disabled."
+- User manually disables in settings
+- Family member revokes access
+
+**Important:** If user/family manually enabled GPS (not automatic), it stays ON even if risk improves.
+
+---
+
+## 2. USER CONSENT & PRIVACY FLOW
+
+### 2.1 Consent Model: Family-Initiated
+
+```
+FLOW: Family Requests Location Access
+
+Step 1: Family Member Action
+  Robert (family) sees Margaret's dashboard
+  Risk Score: 78/100 (HIGH)
+  Robert clicks: [Request Location Access]
+  
+Step 2: Request Sent
+  System creates location_request record
+  Margaret receives in-app notification (next time she opens app)
+  
+Step 3: User Response
+  Margaret opens CogniCare
+  Sees modal popup:
+    ┌──────────────────────────────────────────┐
+    │  📍 Location Sharing Request            │
+    │                                          │
+    │  Robert (Son) has requested access to   │
+    │  your location due to health concerns.  │
+    │                                          │
+    │  Your current risk level: HIGH (78/100) │
+    │                                          │
+    │  Location will only be captured when    │
+    │  you use this app, not continuously.    │
+    │                                          │
+    │  [Allow Location Sharing]  [Decline]    │
+    └──────────────────────────────────────────┘
+  
+Step 4: If User Allows
+  - Browser prompts for GPS permission (standard browser popup)
+  - User grants browser-level GPS access
+  - System records: location_sharing_enabled = 1
+  - Robert receives notification: "Margaret has enabled location sharing"
+  
+Step 5: If User Declines
+  - System records: location_request status = 'declined'
+  - Robert receives notification: "Margaret declined location access"
+  - Robert can request again after 24 hours
+```
+
+### 2.2 User Control & Settings
+
+**In User Settings Page:**
+
+```
+┌────────────────────────────────────────────────┐
+│  Privacy & Sharing Settings                    │
+│                                                │
+│  Location Sharing                              │
+│  Status: ● Enabled                             │
+│  Shared with: Robert (Son)                     │
+│  Last captured: 2 hours ago                    │
+│                                                │
+│  Your location is only captured when you use   │
+│  CogniCare. It is NOT tracked continuously.    │
+│                                                │
+│  [Disable Location Sharing]                    │
+│                                                │
+│  Audit Log:                                    │
+│  • Feb 22, 2:00 PM - Robert viewed your location│
+│  • Feb 22, 9:00 AM - Location captured (game)  │
+│  • Feb 21, 9:15 AM - Location captured (game)  │
+└────────────────────────────────────────────────┘
+```
+
+**User Can:**
+- ✅ Disable location sharing anytime (even if HIGH risk)
+- ✅ See when family viewed their location
+- ✅ See audit log of all location captures
+- ✅ Understand exactly when location is captured
+
+**User Cannot:**
+- ❌ Hide their risk score from family (they consented to monitoring)
+- ❌ Disable location AND stay connected to family if it was condition of connection
+
+---
+
+## 3. GPS TRACKING LOGIC
+
+### 3.1 When Location Is Captured
+
+**Trigger Events:**
+
+1. **User Opens CogniCare App**
+   ```javascript
+   // In App.jsx or main component
+   useEffect(() => {
+     if (userSettings.locationSharingEnabled) {
+       captureLocation('app_opened')
+     }
+   }, [])
+   ```
+
+2. **User Completes a Game**
+   ```javascript
+   // After game submission
+   const submitGameScore = async () => {
+     await gameService.submitScore(gameData)
+     
+     if (userSettings.locationSharingEnabled) {
+       await captureLocation('game_completed')
+     }
+   }
+   ```
+
+3. **Family Requests Current Location**
+   ```javascript
+   // Family clicks "Get Current Location" button
+   // Sends notification to user's device
+   // Next time user opens app, location is captured
+   // Family receives update notification
+   ```
+
+### 3.2 Location Capture Function
+
+```javascript
+// services/locationService.js
+
+async function captureLocation(trigger) {
+  try {
+    // Check if user has granted browser GPS permission
+    if (!navigator.geolocation) {
+      console.error('Geolocation not supported')
+      return null
+    }
+    
+    // Get current position
+    const position = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      })
+    })
+    
+    const locationData = {
+      userId: currentUser.id,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy, // in meters
+      captureTrigger: trigger, // 'app_opened', 'game_completed', 'manual_request'
+      timestamp: new Date().toISOString()
+    }
+    
+    // Reverse geocode to get address (optional)
+    const address = await reverseGeocode(
+      locationData.latitude, 
+      locationData.longitude
+    )
+    locationData.address = address
+    
+    // Send to backend
+    await axios.post('/api/location/capture', locationData)
+    
+    return locationData
+    
+  } catch (error) {
+    console.error('Location capture failed:', error)
+    // Don't block app functionality if GPS fails
+    return null
+  }
+}
+
+// Reverse geocoding using Nominatim (OpenStreetMap, free)
+async function reverseGeocode(lat, lon) {
+  try {
+    const response = await axios.get(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`
+    )
+    return response.data.display_name
+  } catch (error) {
+    return 'Address unavailable'
+  }
+}
+```
+
+### 3.3 Location Update Frequency
+
+**Not Continuous - Event-Based Only:**
+
+- Location captured ONLY when trigger events occur
+- No polling or background tracking
+- No battery drain from continuous GPS
+- Honest representation: "Last known location" not "Current location"
+
+**Example Timeline:**
+```
+9:00 AM - User opens app → Location captured: Home
+9:05 AM - User plays Memory Match → Location captured: Home
+9:10 AM - User plays Word Recall → Location captured: Home
+9:15 AM - User closes app → No more updates until next use
+
+2:00 PM - User opens app at Community Center → Location captured: Community Center
+2:05 PM - User plays games → Location captured: Community Center
+
+6:00 PM - Family checks dashboard → Sees "Last known: Community Center (4 hours ago)"
+```
+
+---
+
+## 4. DATABASE SCHEMA CHANGES
+
+### 4.1 New Tables
+
+```sql
+-- =============================================
+-- TABLE: location_history
+-- Stores GPS location captures
+-- =============================================
+CREATE TABLE location_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  
+  -- GPS data
+  latitude REAL NOT NULL,
+  longitude REAL NOT NULL,
+  accuracy REAL, -- GPS accuracy in meters
+  
+  -- Reverse geocoded address (optional)
+  address TEXT,
+  
+  -- Context
+  capture_trigger TEXT NOT NULL, -- 'app_opened', 'game_completed', 'manual_request'
+  captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  -- Audit trail
+  viewed_by_family BOOLEAN DEFAULT 0,
+  viewed_at DATETIME,
+  
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Indexes for location_history
+CREATE INDEX idx_location_user ON location_history(user_id);
+CREATE INDEX idx_location_captured ON location_history(captured_at DESC);
+CREATE INDEX idx_location_user_time ON location_history(user_id, captured_at DESC);
+
+-- =============================================
+-- TABLE: location_permissions
+-- Manages location sharing permissions
+-- =============================================
+CREATE TABLE location_permissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL UNIQUE,
+  
+  -- Permission status
+  location_sharing_enabled BOOLEAN DEFAULT 0,
+  enabled_at DATETIME,
+  enabled_by TEXT, -- 'user', 'family_request', 'auto_risk_trigger'
+  
+  -- Auto-disable tracking
+  auto_enabled BOOLEAN DEFAULT 0, -- Was it auto-enabled due to HIGH risk?
+  
+  -- User can disable even if HIGH risk
+  user_can_disable BOOLEAN DEFAULT 1,
+  
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- =============================================
+-- TABLE: location_requests
+-- Tracks family requests for location access
+-- =============================================
+CREATE TABLE location_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  family_member_id INTEGER NOT NULL,
+  
+  -- Request status
+  status TEXT NOT NULL, -- 'pending', 'approved', 'declined'
+  requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  responded_at DATETIME,
+  
+  -- Context
+  risk_score_at_request INTEGER,
+  reason TEXT, -- Optional: Family can provide reason
+  
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (family_member_id) REFERENCES family_members(id) ON DELETE CASCADE
+);
+
+-- Index for location_requests
+CREATE INDEX idx_locreq_user ON location_requests(user_id);
+CREATE INDEX idx_locreq_family ON location_requests(family_member_id);
+CREATE INDEX idx_locreq_status ON location_requests(status);
+```
+
+### 4.2 Modified Tables
+
+```sql
+-- Add column to users table
+ALTER TABLE users ADD COLUMN last_app_open DATETIME;
+
+-- Add columns to alerts table for activity monitoring
+ALTER TABLE alerts ADD COLUMN alert_subtype TEXT; 
+-- Values: 'cognitive_decline', 'no_activity', 'location_concern'
+```
+
+---
+
+## 5. BACKEND API ENDPOINTS
+
+### 5.1 Location Capture
+
+**POST /api/location/capture**
+
+Captures user's current GPS location.
+
+**Request:**
+```json
+{
+  "userId": 2,
+  "latitude": 42.3601,
+  "longitude": -71.0589,
+  "accuracy": 15.5,
+  "address": "123 Main St, Boston, MA",
+  "captureTrigger": "game_completed"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "locationId": 456,
+  "message": "Location captured successfully",
+  "notifyFamily": true
+}
+```
+
+**Implementation:**
+```javascript
+// routes/location.js
+router.post('/capture', async (req, res) => {
+  const { userId, latitude, longitude, accuracy, address, captureTrigger } = req.body
+  
+  // Check if user has location sharing enabled
+  const permission = await db.get(
+    'SELECT * FROM location_permissions WHERE user_id = ?',
+    [userId]
+  )
+  
+  if (!permission || !permission.location_sharing_enabled) {
+    return res.status(403).json({ 
+      success: false, 
+      error: 'Location sharing not enabled' 
+    })
+  }
+  
+  // Insert location record
+  const result = await db.run(`
+    INSERT INTO location_history (
+      user_id, latitude, longitude, accuracy, 
+      address, capture_trigger, captured_at
+    ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+  `, [userId, latitude, longitude, accuracy, address, captureTrigger])
+  
+  // Notify family members
+  const family = await db.all(
+    'SELECT * FROM family_members WHERE monitored_user_id = ?',
+    [userId]
+  )
+  
+  // Create in-app notification for family
+  for (const member of family) {
+    await createNotification({
+      familyMemberId: member.id,
+      type: 'location_updated',
+      message: `${permission.user_name}'s location updated`,
+      userId: userId
+    })
+  }
+  
+  res.json({
+    success: true,
+    locationId: result.lastID,
+    notifyFamily: family.length > 0
+  })
+})
+```
+
+---
+
+### 5.2 Get Latest Location
+
+**GET /api/location/:userId/latest**
+
+Get user's most recent location.
+
+**Response:**
+```json
+{
+  "success": true,
+  "location": {
+    "locationId": 456,
+    "latitude": 42.3601,
+    "longitude": -71.0589,
+    "accuracy": 15.5,
+    "address": "123 Main St, Boston, MA",
+    "capturedAt": "2026-02-22T14:30:00Z",
+    "capturedAgo": "2 hours ago",
+    "captureTrigger": "game_completed"
+  },
+  "permissionStatus": {
+    "enabled": true,
+    "enabledBy": "family_request",
+    "autoEnabled": false
+  }
+}
+```
+
+---
+
+### 5.3 Request Location Access
+
+**POST /api/location/request-access**
+
+Family member requests location access from user.
+
+**Request:**
+```json
+{
+  "userId": 2,
+  "familyMemberId": 1,
+  "reason": "Your cognitive health score is HIGH. I'd like to monitor your location for safety.",
+  "riskScore": 78
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "requestId": 123,
+  "status": "pending",
+  "message": "Location access request sent to Margaret"
+}
+```
+
+---
+
+### 5.4 Respond to Location Request
+
+**POST /api/location/respond**
+
+User approves or declines location request.
+
+**Request:**
+```json
+{
+  "requestId": 123,
+  "userId": 2,
+  "response": "approved" // or "declined"
+}
+```
+
+**Response (Approved):**
+```json
+{
+  "success": true,
+  "message": "Location sharing enabled",
+  "nextStep": "Browser will prompt for GPS permission"
+}
+```
+
+**Implementation:**
+```javascript
+router.post('/respond', async (req, res) => {
+  const { requestId, userId, response } = req.body
+  
+  // Update request status
+  await db.run(`
+    UPDATE location_requests 
+    SET status = ?, responded_at = datetime('now')
+    WHERE id = ?
+  `, [response, requestId])
+  
+  if (response === 'approved') {
+    // Enable location sharing
+    await db.run(`
+      INSERT OR REPLACE INTO location_permissions (
+        user_id, location_sharing_enabled, enabled_at, 
+        enabled_by, auto_enabled
+      ) VALUES (?, 1, datetime('now'), 'family_request', 0)
+    `, [userId])
+    
+    // Notify family member
+    const request = await db.get(
+      'SELECT * FROM location_requests WHERE id = ?',
+      [requestId]
+    )
+    
+    await createNotification({
+      familyMemberId: request.family_member_id,
+      type: 'location_approved',
+      message: 'Location sharing approved'
+    })
+    
+    res.json({
+      success: true,
+      message: 'Location sharing enabled'
+    })
+  } else {
+    res.json({
+      success: true,
+      message: 'Location request declined'
+    })
+  }
+})
+```
+
+---
+
+### 5.5 Activity Monitoring
+
+**GET /api/activity/:userId/status**
+
+Get user's recent activity status.
+
+**Response:**
+```json
+{
+  "success": true,
+  "activity": {
+    "lastAppOpen": "2026-02-22T09:00:00Z",
+    "lastAppOpenAgo": "3 hours ago",
+    "playedToday": true,
+    "currentStreak": 31,
+    "lastGameSession": {
+      "date": "2026-02-22",
+      "time": "09:05 AM",
+      "gamesCompleted": 2,
+      "scores": {
+        "memoryMatch": 820,
+        "wordRecall": 780
+      }
+    },
+    "weeklyPattern": [
+      { "date": "2026-02-16", "active": true, "games": 2 },
+      { "date": "2026-02-17", "active": true, "games": 2 },
+      { "date": "2026-02-18", "active": true, "games": 2 },
+      { "date": "2026-02-19", "active": true, "games": 2 },
+      { "date": "2026-02-20", "active": true, "games": 2 },
+      { "date": "2026-02-21", "active": true, "games": 2 },
+      { "date": "2026-02-22", "active": true, "games": 2 }
+    ],
+    "alerts": {
+      "noActivityDays": 0,
+      "alertTriggered": false
+    }
+  }
+}
+```
+
+**Implementation:**
+```javascript
+router.get('/status/:userId', async (req, res) => {
+  const { userId } = req.params
+  
+  // Get last app open
+  const user = await db.get(
+    'SELECT last_app_open FROM users WHERE id = ?',
+    [userId]
+  )
+  
+  // Check if played today
+  const today = await db.get(`
+    SELECT COUNT(*) as count 
+    FROM game_scores 
+    WHERE user_id = ? AND date(created_at) = date('now')
+  `, [userId])
+  
+  // Get current streak
+  const streak = await calculateStreak(userId)
+  
+  // Get last game session
+  const lastSession = await db.all(`
+    SELECT game_type, score, created_at
+    FROM game_scores
+    WHERE user_id = ? AND date(created_at) = date('now')
+    ORDER BY created_at DESC
+  `, [userId])
+  
+  // Get weekly pattern (last 7 days)
+  const weeklyPattern = await db.all(`
+    SELECT 
+      date(created_at) as date,
+      COUNT(DISTINCT id) as games
+    FROM game_scores
+    WHERE user_id = ? AND created_at >= date('now', '-7 days')
+    GROUP BY date(created_at)
+    ORDER BY date ASC
+  `, [userId])
+  
+  // Check for inactivity alert
+  const daysSinceLastActivity = calculateDaysSince(user.last_app_open)
+  const alertTriggered = daysSinceLastActivity >= 2
+  
+  res.json({
+    success: true,
+    activity: {
+      lastAppOpen: user.last_app_open,
+      lastAppOpenAgo: formatTimeAgo(user.last_app_open),
+      playedToday: today.count > 0,
+      currentStreak: streak,
+      lastGameSession: formatLastSession(lastSession),
+      weeklyPattern: formatWeeklyPattern(weeklyPattern),
+      alerts: {
+        noActivityDays: daysSinceLastActivity,
+        alertTriggered: alertTriggered
+      }
+    }
+  })
+})
+```
+
+---
+
+## 6. FRONTEND COMPONENTS
+
+### 6.1 Location Request Modal (User Side)
+
+**Component:** `LocationRequestModal.jsx`
+
+```javascript
+import { useState } from 'react'
+import { Modal, Button } from '../components/common'
+
+export function LocationRequestModal({ request, onRespond, onClose }) {
+  const [loading, setLoading] = useState(false)
+  
+  const handleResponse = async (approved) => {
+    setLoading(true)
+    
+    if (approved) {
+      // First approve in backend
+      await onRespond(request.id, 'approved')
+      
+      // Then request browser GPS permission
+      try {
+        const permission = await navigator.permissions.query({ name: 'geolocation' })
+        
+        if (permission.state === 'denied') {
+          alert('Please enable location permissions in your browser settings')
+          return
+        }
+        
+        // Capture initial location
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            await captureLocation({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy,
+              trigger: 'permission_granted'
+            })
+            
+            alert('Location sharing enabled successfully')
+            onClose()
+          },
+          (error) => {
+            console.error('Location error:', error)
+            alert('Could not get current location. You can try again later.')
+          }
+        )
+      } catch (error) {
+        console.error('Permission error:', error)
+      }
+    } else {
+      await onRespond(request.id, 'declined')
+      onClose()
+    }
+    
+    setLoading(false)
+  }
+  
+  return (
+    <Modal isOpen={true} onClose={onClose}>
+      <div className="p-6">
+        <h2 className="text-2xl font-bold mb-4">
+          📍 Location Sharing Request
+        </h2>
+        
+        <div className="mb-6">
+          <p className="text-gray-700 mb-3">
+            <strong>{request.familyMemberName} ({request.relationship})</strong> has requested access to your location due to health concerns.
+          </p>
+          
+          <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-3">
+            <p className="text-sm text-yellow-800">
+              Your current risk level: <strong>{request.riskLevel} ({request.riskScore}/100)</strong>
+            </p>
+          </div>
+          
+          {request.reason && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-3">
+              <p className="text-sm text-blue-800">
+                <strong>Message from {request.familyMemberName}:</strong><br/>
+                {request.reason}
+              </p>
+            </div>
+          )}
+          
+          <div className="bg-gray-50 border border-gray-200 rounded p-3">
+            <p className="text-sm text-gray-700">
+              <strong>How this works:</strong>
+            </p>
+            <ul className="text-sm text-gray-600 mt-2 space-y-1">
+              <li>✓ Location is only captured when you use CogniCare</li>
+              <li>✓ Not tracked continuously or in the background</li>
+              <li>✓ You can disable this anytime in Settings</li>
+              <li>✓ You can see when family views your location</li>
+            </ul>
+          </div>
+        </div>
+        
+        <div className="flex gap-3">
+          <Button 
+            onClick={() => handleResponse(true)}
+            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+            disabled={loading}
+          >
+            {loading ? 'Enabling...' : 'Allow Location Sharing'}
+          </Button>
+          
+          <Button 
+            onClick={() => handleResponse(false)}
+            className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800"
+            disabled={loading}
+          >
+            Decline
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+```
+
+---
+
+### 6.2 Location Status Card (Family Dashboard)
+
+**Component:** `LocationStatusCard.jsx`
+
+```javascript
+import { useState } from 'react'
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
+
+// Fix Leaflet default icon issue
+delete L.Icon.Default.prototype._getIconUrl
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
+  iconUrl: require('leaflet/dist/images/marker-icon.png'),
+  shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
+})
+
+export function LocationStatusCard({ userId, userName, locationData, permissionStatus }) {
+  const [showMap, setShowMap] = useState(false)
+  const [requesting, setRequesting] = useState(false)
+  
+  const handleRequestAccess = async () => {
+    setRequesting(true)
+    await locationService.requestAccess(userId)
+    alert(`Location access request sent to ${userName}`)
+    setRequesting(false)
+  }
+  
+  if (!permissionStatus.enabled) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 border border-gray-200">
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <span>📍</span>
+          Location Tracking
+        </h3>
+        
+        <div className="bg-gray-50 rounded p-4 mb-4">
+          <p className="text-gray-600 text-sm mb-3">
+            Location tracking is not currently enabled for {userName}.
+          </p>
+          <p className="text-gray-500 text-xs">
+            You can request access to monitor their location for safety purposes.
+          </p>
+        </div>
+        
+        <button
+          onClick={handleRequestAccess}
+          disabled={requesting}
+          className="w-full bg-teal-600 hover:bg-teal-700 text-white font-medium py-2 px-4 rounded disabled:opacity-50"
+        >
+          {requesting ? 'Sending Request...' : 'Request Location Access'}
+        </button>
+      </div>
+    )
+  }
+  
+  if (!locationData) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 border border-gray-200">
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <span>📍</span>
+          Location Status
+        </h3>
+        
+        <div className="bg-yellow-50 rounded p-4">
+          <p className="text-yellow-800 text-sm">
+            Location sharing is enabled, but no location has been captured yet.
+          </p>
+          <p className="text-yellow-600 text-xs mt-2">
+            Location will be updated when {userName} uses CogniCare.
+          </p>
+        </div>
+      </div>
+    )
+  }
+  
+  return (
+    <div className="bg-white rounded-lg shadow p-6 border border-gray-200">
+      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span>📍</span>
+        Location Status
+      </h3>
+      
+      {/* Status Info */}
+      <div className="space-y-3 mb-4">
+        <div className="flex justify-between items-start">
+          <div>
+            <p className="text-sm text-gray-600">Last Known Location</p>
+            <p className="font-medium text-gray-900">{locationData.address || 'Address unavailable'}</p>
+          </div>
+          <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded">
+            Active
+          </span>
+        </div>
+        
+        <div className="flex justify-between">
+          <div>
+            <p className="text-sm text-gray-600">Last Updated</p>
+            <p className="text-sm font-medium">{locationData.capturedAgo}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-sm text-gray-600">Accuracy</p>
+            <p className="text-sm font-medium">±{locationData.accuracy}m</p>
+          </div>
+        </div>
+        
+        <div className="text-xs text-gray-500 bg-gray-50 rounded p-2">
+          Captured when: {formatCaptureTrigger(locationData.captureTrigger)}
+        </div>
+      </div>
+      
+      {/* Map Toggle */}
+      <button
+        onClick={() => setShowMap(!showMap)}
+        className="w-full bg-teal-600 hover:bg-teal-700 text-white font-medium py-2 px-4 rounded mb-3"
+      >
+        {showMap ? 'Hide Map' : 'View on Map'}
+      </button>
+      
+      {/* Map View */}
+      {showMap && (
+        <div className="h-64 rounded overflow-hidden border border-gray-300">
+          <MapContainer
+            center={[locationData.latitude, locationData.longitude]}
+            zoom={15}
+            style={{ height: '100%', width: '100%' }}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            />
+            <Marker position={[locationData.latitude, locationData.longitude]}>
+              <Popup>
+                <div>
+                  <strong>{userName}</strong><br/>
+                  {locationData.address}<br/>
+                  <span className="text-xs text-gray-600">
+                    {locationData.capturedAgo}
+                  </span>
+                </div>
+              </Popup>
+            </Marker>
+          </MapContainer>
+        </div>
+      )}
+      
+      {/* Privacy Note */}
+      <p className="text-xs text-gray-500 mt-3 italic">
+        Location is only captured when {userName} uses CogniCare, not continuously.
+      </p>
+    </div>
+  )
+}
+
+function formatCaptureTrigger(trigger) {
+  const triggers = {
+    'app_opened': 'App opened',
+    'game_completed': 'Game completed',
+    'manual_request': 'Manual request',
+    'permission_granted': 'Permission granted'
+  }
+  return triggers[trigger] || trigger
+}
+```
+
+---
+
+### 6.3 Activity Monitor Card (Family Dashboard)
+
+**Component:** `ActivityMonitorCard.jsx`
+
+```javascript
+export function ActivityMonitorCard({ userId, userName, activityData }) {
+  const { lastAppOpen, playedToday, currentStreak, weeklyPattern, alerts } = activityData
+  
+  return (
+    <div className="bg-white rounded-lg shadow p-6 border border-gray-200">
+      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <span>📊</span>
+        Activity Status
+      </h3>
+      
+      {/* Alert Banner (if no activity) */}
+      {alerts.alertTriggered && (
+        <div className="bg-red-50 border border-red-200 rounded p-3 mb-4">
+          <p className="text-red-800 font-medium text-sm">
+            ⚠️ No activity in {alerts.noActivityDays} days
+          </p>
+          <p className="text-red-600 text-xs mt-1">
+            {userName} hasn't opened CogniCare since {formatDate(lastAppOpen)}
+          </p>
+        </div>
+      )}
+      
+      {/* Status Grid */}
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="bg-gray-50 rounded p-3">
+          <p className="text-xs text-gray-600 mb-1">Last Active</p>
+          <p className="font-semibold text-gray-900">
+            {formatTimeAgo(lastAppOpen)}
+          </p>
+        </div>
+        
+        <div className="bg-gray-50 rounded p-3">
+          <p className="text-xs text-gray-600 mb-1">Played Today</p>
+          <p className="font-semibold">
+            {playedToday ? (
+              <span className="text-green-600">✓ Yes</span>
+            ) : (
+              <span className="text-orange-600">⚠️ Not yet</span>
+            )}
+          </p>
+        </div>
+        
+        <div className="bg-gray-50 rounded p-3">
+          <p className="text-xs text-gray-600 mb-1">Current Streak</p>
+          <p className="font-semibold text-gray-900 flex items-center gap-1">
+            {currentStreak} days
+            {currentStreak >= 7 && <span>🔥</span>}
+          </p>
+        </div>
+        
+        <div className="bg-gray-50 rounded p-3">
+          <p className="text-xs text-gray-600 mb-1">Weekly Engagement</p>
+          <p className="font-semibold text-gray-900">
+            {weeklyPattern.filter(d => d.active).length}/7 days
+          </p>
+        </div>
+      </div>
+      
+      {/* 7-Day Activity Calendar */}
+      <div>
+        <p className="text-sm text-gray-600 mb-2">Last 7 Days</p>
+        <div className="flex gap-1">
+          {weeklyPattern.map((day, index) => (
+            <div
+              key={index}
+              className={`flex-1 h-12 rounded flex flex-col items-center justify-center ${
+                day.active 
+                  ? 'bg-green-100 border border-green-300' 
+                  : 'bg-gray-100 border border-gray-300'
+              }`}
+            >
+              <span className="text-xs text-gray-600">
+                {formatDayOfWeek(day.date)}
+              </span>
+              <span className="text-xs font-medium">
+                {day.active ? '✓' : '—'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function formatDayOfWeek(dateString) {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const date = new Date(dateString)
+  return days[date.getDay()]
+}
+```
+
+---
+
+## 7. FAMILY DASHBOARD INTEGRATION
+
+### 7.1 Updated Family Dashboard Layout
+
+```javascript
+// pages/family/FamilyDashboard.jsx
+
+export function FamilyDashboard() {
+  const { familyMemberId } = useAuth()
+  const [dashboardData, setDashboardData] = useState(null)
+  const [locationData, setLocationData] = useState(null)
+  const [activityData, setActivityData] = useState(null)
+  
+  useEffect(() => {
+    async function fetchData() {
+      // Existing dashboard data
+      const dashboard = await dashboardService.getFamilyDashboard(familyMemberId)
+      setDashboardData(dashboard)
+      
+      // NEW: Fetch location data
+      const location = await locationService.getLatestLocation(dashboard.monitoredUser.userId)
+      setLocationData(location)
+      
+      // NEW: Fetch activity data
+      const activity = await activityService.getStatus(dashboard.monitoredUser.userId)
+      setActivityData(activity)
+    }
+    
+    fetchData()
+  }, [familyMemberId])
+  
+  if (!dashboardData) return <LoadingSpinner />
+  
+  return (
+    <div className="max-w-7xl mx-auto p-6">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-gray-900">
+          Monitoring: {dashboardData.monitoredUser.name}
+        </h1>
+        <p className="text-gray-600">
+          Age {dashboardData.monitoredUser.age} • Last activity: {dashboardData.monitoredUser.lastActivityText}
+        </p>
+      </div>
+      
+      {/* Alert Banner (if HIGH risk) */}
+      {dashboardData.alert?.active && (
+        <AlertBanner alert={dashboardData.alert} />
+      )}
+      
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column - Risk & Cognitive */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Risk Score Card */}
+          <RiskScoreCard riskAssessment={dashboardData.riskAssessment} />
+          
+          {/* 90-Day Trend Chart */}
+          <TrendChart trendData={dashboardData.trendData} />
+          
+          {/* Domain Breakdown */}
+          <DomainBreakdownCard domains={dashboardData.domainBreakdown} />
+        </div>
+        
+        {/* Right Column - Activity & Location */}
+        <div className="space-y-6">
+          {/* NEW: Activity Monitor Card */}
+          {activityData && (
+            <ActivityMonitorCard
+              userId={dashboardData.monitoredUser.userId}
+              userName={dashboardData.monitoredUser.name}
+              activityData={activityData}
+            />
+          )}
+          
+          {/* NEW: Location Status Card */}
+          {locationData && (
+            <LocationStatusCard
+              userId={dashboardData.monitoredUser.userId}
+              userName={dashboardData.monitoredUser.name}
+              locationData={locationData.location}
+              permissionStatus={locationData.permissionStatus}
+            />
+          )}
+          
+          {/* Recent Activity */}
+          <RecentActivityCard activity={dashboardData.recentActivity} />
+          
+          {/* Quick Actions */}
+          <QuickActionsCard />
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## 8. ACTIVITY MONITORING
+
+### 8.1 Activity Tracking Logic
+
+**Track App Opens:**
+
+```javascript
+// App.jsx or main component
+useEffect(() => {
+  // Update last_app_open timestamp
+  if (currentUser) {
+    axios.post('/api/activity/app-opened', {
+      userId: currentUser.id
+    })
+  }
+}, [currentUser])
+```
+
+**Backend Implementation:**
+
+```javascript
+// routes/activity.js
+router.post('/app-opened', async (req, res) => {
+  const { userId } = req.body
+  
+  await db.run(`
+    UPDATE users 
+    SET last_app_open = datetime('now')
+    WHERE id = ?
+  `, [userId])
+  
+  // Check for inactivity alert resolution
+  const lastUpdate = await db.get(
+    'SELECT last_app_open FROM users WHERE id = ?',
+    [userId]
+  )
+  
+  // If there was a no-activity alert, resolve it
+  await db.run(`
+    UPDATE alerts
+    SET acknowledged = 1, acknowledged_at = datetime('now')
+    WHERE user_id = ? AND alert_subtype = 'no_activity' AND acknowledged = 0
+  `, [userId])
+  
+  res.json({ success: true })
+})
+```
+
+### 8.2 Inactivity Alert Generation
+
+**Scheduled Job (runs daily):**
+
+```javascript
+// jobs/checkInactivity.js
+const cron = require('node-cron')
+
+// Run every day at 9 AM
+cron.schedule('0 9 * * *', async () => {
+  console.log('Checking for inactive users...')
+  
+  // Find users who haven't opened app in 2+ days
+  const inactiveUsers = await db.all(`
+    SELECT 
+      u.id as user_id,
+      u.name,
+      u.last_app_open,
+      f.id as family_id,
+      f.name as family_name
+    FROM users u
+    JOIN family_members f ON f.monitored_user_id = u.id
+    WHERE u.last_app_open < datetime('now', '-2 days')
+      AND NOT EXISTS (
+        SELECT 1 FROM alerts a
+        WHERE a.user_id = u.id 
+          AND a.alert_subtype = 'no_activity'
+          AND a.acknowledged = 0
+      )
+  `)
+  
+  // Create alerts for each inactive user
+  for (const user of inactiveUsers) {
+    const daysSince = Math.floor(
+      (Date.now() - new Date(user.last_app_open)) / (1000 * 60 * 60 * 24)
+    )
+    
+    await db.run(`
+      INSERT INTO alerts (
+        user_id, family_member_id, alert_type, alert_subtype,
+        severity, message, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    `, [
+      user.user_id,
+      user.family_id,
+      'engagement_drop',
+      'no_activity',
+      'MEDIUM',
+      `${user.name} hasn't opened CogniCare in ${daysSince} days`
+    ])
+    
+    console.log(`Alert created for ${user.name} (${daysSince} days inactive)`)
+  }
+})
+```
+
+---
+
+## 9. IMPLEMENTATION STEPS
+
+### Phase 1: Database Setup (1 hour)
+
+```bash
+# 1. Create migration script
+cd backend
+nano migrations/add_location_tracking.sql
+
+# 2. Add all CREATE TABLE statements from section 4.1
+
+# 3. Run migration
+sqlite3 cognicare.db < migrations/add_location_tracking.sql
+
+# 4. Verify tables created
+sqlite3 cognicare.db
+sqlite> .tables
+# Should see: location_history, location_permissions, location_requests
+```
+
+---
+
+### Phase 2: Backend API (2-3 hours)
+
+```bash
+# 1. Create location routes
+cd backend/routes
+touch location.js activity.js
+
+# 2. Implement all endpoints from section 5
+
+# 3. Add to server.js
+# server.js
+const locationRoutes = require('./routes/location')
+const activityRoutes = require('./routes/activity')
+
+app.use('/api/location', locationRoutes)
+app.use('/api/activity', activityRoutes)
+
+# 4. Test with curl
+curl -X POST http://localhost:3000/api/location/capture \
+  -H "Content-Type: application/json" \
+  -d '{"userId":2,"latitude":42.36,"longitude":-71.05,"captureTrigger":"test"}'
+```
+
+---
+
+### Phase 3: Frontend Components (2-3 hours)
+
+```bash
+# 1. Install dependencies
+cd frontend
+npm install leaflet react-leaflet
+
+# 2. Create components
+mkdir src/components/location
+touch src/components/location/LocationStatusCard.jsx
+touch src/components/location/LocationRequestModal.jsx
+touch src/components/location/ActivityMonitorCard.jsx
+
+# 3. Create services
+touch src/services/locationService.js
+touch src/services/activityService.js
+
+# 4. Implement components from section 6
+```
+
+---
+
+### Phase 4: Integration (1 hour)
+
+```bash
+# 1. Update FamilyDashboard.jsx
+# Add LocationStatusCard and ActivityMonitorCard
+
+# 2. Update App.jsx
+# Add app-open tracking
+# Check for location requests on mount
+
+# 3. Update UserSettings.jsx
+# Add location sharing controls
+# Add audit log display
+```
+
+---
+
+### Phase 5: Testing (30 min)
+
+**Manual Test Checklist:**
+
+```
+User Flow:
+□ User logs in as Margaret (HIGH risk user)
+□ Sees location request modal
+□ Clicks "Allow Location Sharing"
+□ Browser prompts for GPS permission
+□ User grants permission
+□ Location is captured and saved
+
+Family Flow:
+□ Family logs in as Robert
+□ Sees LocationStatusCard on dashboard
+□ Location shows with "Last known: Home"
+□ Clicks "View on Map"
+□ Map displays with marker at correct location
+□ Activity card shows "Played today: ✓"
+
+Alert Flow:
+□ Manually set user's last_app_open to 3 days ago
+□ Run inactivity check job
+□ Verify alert created in database
+□ Family dashboard shows alert banner
+□ User opens app
+□ Alert is auto-resolved
+```
+
+---
+
+## 10. TESTING CHECKLIST
+
+### 10.1 Database Testing
+
+```sql
+-- Test 1: Verify tables exist
+.tables
+
+-- Test 2: Insert test location
+INSERT INTO location_history (user_id, latitude, longitude, accuracy, address, capture_trigger)
+VALUES (2, 42.3601, -71.0589, 15.5, '123 Main St', 'test');
+
+-- Test 3: Query latest location
+SELECT * FROM location_history WHERE user_id = 2 ORDER BY captured_at DESC LIMIT 1;
+
+-- Test 4: Check permissions
+SELECT * FROM location_permissions WHERE user_id = 2;
+```
+
+### 10.2 API Testing
+
+```bash
+# Test location capture
+curl -X POST http://localhost:3000/api/location/capture \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 2,
+    "latitude": 42.3601,
+    "longitude": -71.0589,
+    "accuracy": 15.5,
+    "address": "123 Main St, Boston, MA",
+    "captureTrigger": "game_completed"
+  }'
+
+# Test get latest location
+curl http://localhost:3000/api/location/2/latest
+
+# Test activity status
+curl http://localhost:3000/api/activity/2/status
+
+# Test request access
+curl -X POST http://localhost:3000/api/location/request-access \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": 2,
+    "familyMemberId": 1,
+    "reason": "Health concern",
+    "riskScore": 78
+  }'
+```
+
+### 10.3 Frontend Testing
+
+**Browser Console Tests:**
+
+```javascript
+// Test location capture
+async function testLocationCapture() {
+  const position = await new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject)
+  })
+  
+  console.log('GPS Position:', position.coords)
+  
+  const result = await locationService.captureLocation({
+    latitude: position.coords.latitude,
+    longitude: position.coords.longitude,
+    accuracy: position.coords.accuracy,
+    trigger: 'test'
+  })
+  
+  console.log('Capture result:', result)
+}
+
+testLocationCapture()
+```
+
+---
+
+## 11. DEMO SCRIPT
+
+### 11.1 Hackathon Demo (90 seconds total)
+
+**Setup (Before Demo):**
+1. Margaret's account with HIGH risk (78/100)
+2. Location permission already granted
+3. Last location captured 2 hours ago (at home)
+4. Activity shows she played games today
+
+**Demo Flow (60 seconds for this feature):**
+
+```
+NARRATOR SCRIPT:
+
+[Screen: Robert's Family Dashboard]
+
+"Now, when a user's cognitive health reaches a concerning level, 
+families can request location monitoring for safety.
+
+[Point to Margaret's risk score: 78/100 - HIGH]
+
+Margaret's risk score is HIGH at 78 out of 100.
+
+[Scroll to Location Status Card]
+
+Robert can now see her last known location — captured 2 hours ago 
+when she played her morning games.
+
+[Click "View on Map"]
+
+[Map opens showing marker at home address]
+
+This is NOT continuous tracking — we respect privacy. Location 
+is only captured when Margaret actively uses CogniCare.
+
+[Scroll to Activity Monitor Card]
+
+Robert also sees she completed her games today and maintained 
+her 31-day streak — reassuring signs of daily engagement.
+
+[Point to 7-day calendar showing all green checkmarks]
+
+If she hadn't opened the app in 2+ days, Robert would get an alert 
+to check on her.
+
+This gives families peace of mind while respecting user autonomy."
+
+[Total time: 50-60 seconds]
+```
+
+### 11.2 Key Talking Points
+
+**During Q&A:**
+
+**Privacy Question:** "Isn't tracking invasive?"
+**Answer:** "Location is only captured when the user actively uses CogniCare — when they open the app or play games. It's not continuous background tracking. Users can disable it anytime, even if at HIGH risk. We show users an audit log of when family viewed their location."
+
+**Technical Question:** "How does GPS work in a web app?"
+**Answer:** "We use the browser's Geolocation API, which is available in all modern browsers. It's the same technology Google Maps uses. The limitation is that web apps can't track in the background like native apps, but that's actually a privacy feature we embrace."
+
+**Family Question:** "What if my mom refuses to share location?"
+**Answer:** "Users have full autonomy. They can decline location requests or disable sharing anytime. However, families can explain the safety benefits, especially when risk scores are HIGH. It's a conversation starter about care and safety."
+
+---
+
+## 12. PRIVACY & COMPLIANCE NOTES
+
+### 12.1 Data Retention
+
+```javascript
+// Automated data cleanup (optional)
+cron.schedule('0 0 * * *', async () => {
+  // Delete location history older than 90 days
+  await db.run(`
+    DELETE FROM location_history
+    WHERE captured_at < datetime('now', '-90 days')
+  `)
+  
+  console.log('Old location data cleaned up')
+})
+```
+
+### 12.2 User Rights (GDPR-Style)
+
+**User Can:**
+- ✅ View all their location history
+- ✅ Export their location data (JSON)
+- ✅ Delete all their location history
+- ✅ See who viewed their location and when
+- ✅ Revoke location access anytime
+
+**Implementation:**
+
+```javascript
+// GET /api/location/export
+router.get('/export/:userId', async (req, res) => {
+  const locations = await db.all(
+    'SELECT * FROM location_history WHERE user_id = ? ORDER BY captured_at DESC',
+    [req.params.userId]
+  )
+  
+  res.json({
+    export_date: new Date().toISOString(),
+    user_id: req.params.userId,
+    total_records: locations.length,
+    data: locations
+  })
+})
+
+// DELETE /api/location/delete-all
+router.delete('/delete-all/:userId', async (req, res) => {
+  await db.run('DELETE FROM location_history WHERE user_id = ?', [req.params.userId])
+  
+  res.json({
+    success: true,
+    message: 'All location history deleted'
+  })
+})
+```
+
+---
+
+## 13. FUTURE ENHANCEMENTS (Post-Hackathon)
+
+### 13.1 Native Mobile App
+
+**Why:** Continuous background GPS tracking
+**Timeline:** 2-3 weeks development
+**Platforms:** React Native for iOS + Android
+
+### 13.2 Geofencing
+
+**Feature:** Define safe zones (home, community center)
+**Alerts:** Notify if user leaves zone for >4 hours
+**Complexity:** Medium (add zones table + distance calculation)
+
+### 13.3 Route History
+
+**Feature:** Show user's movements over time
+**Display:** Polyline on map showing path
+**Privacy:** Auto-delete routes >7 days old
+
+### 13.4 Predictive Alerts
+
+**Feature:** ML model predicts unusual location patterns
+**Example:** "Mom is usually home by 6 PM, but location shows she's 20 miles away at 8 PM"
+**Complexity:** High (requires historical pattern analysis)
+
+---
+
+## 14. CONCLUSION
+
+This GPS tracking feature adds a critical safety layer to CogniCare while maintaining strong privacy protections:
+
+✅ **Triggers on risk** — Only activates when cognitive health is concerning  
+✅ **User consent required** — Family must request, user must approve  
+✅ **Not continuous** — Only captures when app is actively used  
+✅ **Full transparency** — Users see audit logs and can revoke anytime  
+✅ **Activity monitoring** — Alerts if user disengages from daily games  
+
+**Implementation Time:** 6-8 hours total  
+**Demo Impact:** High — shows comprehensive care beyond just cognitive testing  
+**Privacy Compliance:** Strong — respects user autonomy while enabling family care
+
+---
+
+**END OF GPS TRACKING FEATURE SPECIFICATION**
+
+All implementation details, code examples, API specs, and testing procedures are now complete and ready for development!

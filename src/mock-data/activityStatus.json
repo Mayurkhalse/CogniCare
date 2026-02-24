@@ -1,0 +1,30 @@
+{
+  "activity": {
+    "lastAppOpen": "2026-02-24T09:00:00Z",
+    "lastAppOpenAgo": "3 hours ago",
+    "playedToday": true,
+    "currentStreak": 31,
+    "lastGameSession": {
+      "date": "2026-02-24",
+      "time": "09:05 AM",
+      "gamesCompleted": 2,
+      "scores": {
+        "memoryMatch": 820,
+        "wordRecall": 780
+      }
+    },
+    "weeklyPattern": [
+      { "date": "2026-02-18", "active": true, "games": 2 },
+      { "date": "2026-02-19", "active": true, "games": 2 },
+      { "date": "2026-02-20", "active": true, "games": 2 },
+      { "date": "2026-02-21", "active": true, "games": 2 },
+      { "date": "2026-02-22", "active": true, "games": 2 },
+      { "date": "2026-02-23", "active": true, "games": 2 },
+      { "date": "2026-02-24", "active": true, "games": 2 }
+    ],
+    "alerts": {
+      "noActivityDays": 0,
+      "alertTriggered": false
+    }
+  }
+}

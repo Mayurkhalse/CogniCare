@@ -1,0 +1,17 @@
+{
+  "location": {
+    "locationId": 456,
+    "latitude": 42.3601,
+    "longitude": -71.0589,
+    "accuracy": 15.5,
+    "address": "Faneuil Hall Marketplace, Boston, MA",
+    "capturedAt": "2026-02-24T14:30:00Z",
+    "capturedAgo": "2 hours ago",
+    "captureTrigger": "game_completed"
+  },
+  "permissionStatus": {
+    "enabled": true,
+    "enabledBy": "family_request",
+    "autoEnabled": false
+  }
+}
