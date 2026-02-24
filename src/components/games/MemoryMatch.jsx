@@ -21,10 +21,10 @@ const Card = ({ card, onFlip, isFlipped, isMatched }) => {
       transition={{ duration: 0.5 }}
       style={{ transformStyle: 'preserve-3d' }}
     >
-      <div className="absolute w-full h-full bg-primary rounded-lg flex items-center justify-center backface-hidden">
+      <div className="absolute w-full h-full bg-primary rounded-lg flex items-center justify-center backface-hidden border">
         {/* Back of card */}
       </div>
-      <div className="absolute w-full h-full bg-white rounded-lg flex items-center justify-center text-4xl" style={{ transform: 'rotateY(180deg)', backfaceVisibility: 'hidden' }}>
+      <div className="absolute w-full h-full bg-white rounded-lg flex items-center justify-center text-4xl border" style={{ transform: 'rotateY(180deg)', backfaceVisibility: 'hidden' }}>
         {card.emoji}
       </div>
     </motion.div>

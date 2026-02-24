@@ -56,7 +56,7 @@ const Login = () => {
           {error && <p className="text-sm text-red-600 text-center">{error}</p>}
 
           <div>
-            <Button type="submit" className="w-full">
+            <Button type="submit" className="w-full border hover:scale-105 transition-transform duration-200">
               Sign In
             </Button>
           </div>
@@ -65,8 +65,13 @@ const Login = () => {
             <p className="font-semibold mb-2">Demo Accounts:</p>
             <div className="space-y-2">
                 <button onClick={() => handleDemoLogin('sarah@demo.cognicare.app')} className="text-primary hover:underline">sarah@demo.cognicare.app (User)</button>
-                <p>robert@demo.cognicare.app (Family)</p>
-                <p>admin@demo.cognicare.app (Admin)</p>
+                
+                
+                <button onClick={() => handleDemoLogin('robert@demo.cognicare.app')} className="text-primary hover:underline">robert@demo.cognicare.app (Family)</button>
+                
+                <button onClick={() => handleDemoLogin('admin@demo.cognicare.app')} className="text-primary hover:underline">admin@demo.cognicare.app (Admin)</button>
+                <p></p>
+                <p></p>
             </div>
         </div>
       </div>
